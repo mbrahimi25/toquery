@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS green_spaces (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    source_id TEXT UNIQUE,
+    name TEXT NOT NULL,
+    geometry GEOMETRY(MULTIPOLYGON, 4326) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_green_spaces_geometry
+ON green_spaces
+USING GIST (geometry);
