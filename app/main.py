@@ -1,12 +1,17 @@
 from fastapi.middleware.cors import CORSMiddleware
+import logging
+import json
 import os
 from pathlib import Path
+from fastapi.responses import HTMLResponse
 
 import geopandas  # Not needed by the endpoint; remove if unused elsewhere.
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+
+logger = logging.getLogger(__name__)
 
 # Load .env from the project root.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +44,20 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+
+@app.get("/demo", include_in_schema=False)
+def map_demo():
+    """Serve the Leaflet map demo."""
+    carto_key = dotenv_values(PROJECT_ROOT / ".env").get("CARTO_KEY") or os.getenv("CARTO_KEY")
+    if not carto_key:
+        raise HTTPException(status_code=503, detail="CARTO_KEY is missing from .env")
+
+    html = (PROJECT_ROOT / "app" / "static" / "demo.html").read_text(encoding="utf-8")
+    return HTMLResponse(
+        html.replace("'__CARTO_KEY__'", json.dumps(carto_key)),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/health")
@@ -133,6 +152,113 @@ def get_green_spaces(
                 "area_name": row["area_name"],
                 "area_class": row["area_class"],
             },
+        }
+        for row in rows
+    ]
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "count": len(features),
+    }
+
+
+@app.get("/cycling-network")
+def get_cycling_network(
+    min_lon: float = Query(ge=-180, le=180),
+    min_lat: float = Query(ge=-90, le=90),
+    max_lon: float = Query(ge=-180, le=180),
+    max_lat: float = Query(ge=-90, le=90),
+):
+    """Return cycling network segments intersecting a geographic bounding box."""
+
+    if min_lon >= max_lon:
+        raise HTTPException(
+            status_code=422,
+            detail="min_lon must be less than max_lon",
+        )
+
+    if min_lat >= max_lat:
+        raise HTTPException(
+            status_code=422,
+            detail="min_lat must be less than max_lat",
+        )
+
+    query = text(
+        """
+        WITH bounds AS (
+            SELECT ST_MakeEnvelope(
+                :min_lon,
+                :min_lat,
+                :max_lon,
+                :max_lat,
+                4326
+            ) AS geom
+        )
+        SELECT
+            cn.segment_id,
+            cn.street_name,
+            cn.from_street,
+            cn.to_street,
+            cn.roadclass,
+            cn.cnpclass,
+            cn.surface,
+            cn.owner,
+            cn.dir_loworder,
+            cn.infra_loworder,
+            cn.infra_highorder,
+            cn.installed,
+            cn.upgraded,
+            cn.converted,
+            ST_AsGeoJSON(cn.geometry)::json AS geometry
+        FROM cycling_network AS cn
+        CROSS JOIN bounds
+        WHERE cn.geometry && bounds.geom
+          AND ST_Intersects(cn.geometry, bounds.geom)
+        ORDER BY cn.street_name, cn.segment_id
+        """
+    )
+
+    try:
+        with engine.connect() as connection:
+            rows = connection.execute(
+                query,
+                {
+                    "min_lon": min_lon,
+                    "min_lat": min_lat,
+                    "max_lon": max_lon,
+                    "max_lat": max_lat,
+                },
+            ).mappings().all()
+
+    except SQLAlchemyError:
+        logger.exception("Cycling network query failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to query cycling network",
+        )
+
+    properties = (
+        "segment_id",
+        "street_name",
+        "from_street",
+        "to_street",
+        "roadclass",
+        "cnpclass",
+        "surface",
+        "owner",
+        "dir_loworder",
+        "infra_loworder",
+        "infra_highorder",
+        "installed",
+        "upgraded",
+        "converted",
+    )
+    features = [
+        {
+            "type": "Feature",
+            "geometry": row["geometry"],
+            "properties": {key: row[key] for key in properties},
         }
         for row in rows
     ]

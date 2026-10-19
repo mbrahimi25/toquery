@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Toronto Green Spaces & Cycling</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.45 system-ui, sans-serif; color: #17312b; background: #f4f7f2; }
+    header { padding: 18px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; background: #fff; border-bottom: 1px solid #dce6dd; }
+    h1 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+    .sub { color: #64756e; font-size: 13px; }
+    main { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 68px); }
+    aside { padding: 22px; background: #fff; border-right: 1px solid #dce6dd; }
+    .eyebrow { color: #75867e; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    h2 { margin: 6px 0 18px; font-size: 18px; }
+    label { display: flex; align-items: center; gap: 10px; margin: 12px 0; font-weight: 600; }
+    input { accent-color: #198754; width: 17px; height: 17px; }
+    .key { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    .green { background: #27a66b; } .bike { background: #e87435; }
+    #status { margin-top: 22px; padding: 12px; color: #53665d; font-size: 13px; background: #f4f7f2; border-radius: 8px; }
+    #map { min-height: 540px; }
+    .leaflet-popup-content { margin: 12px 14px; }
+    .popup-title { font-weight: 700; margin-bottom: 4px; }
+    @media (max-width: 700px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid #dce6dd; padding: 14px 18px; } h2 { margin-bottom: 8px; } #map { min-height: 65vh; } header { padding: 14px 18px; } }
+  </style>
+</head>
+<body>
+  <header><div><h1>Toronto, outside</h1><div class="sub">Explore green spaces and cycling routes</div></div><div class="eyebrow">GeoQuery map demo</div></header>
+  <main>
+    <aside>
+      <div class="eyebrow">Map layers</div><h2>What’s nearby?</h2>
+      <label><input id="greens-toggle" type="checkbox" checked><span class="key green"></span> Green spaces</label>
+      <label><input id="cycling-toggle" type="checkbox" checked><span class="key bike"></span> Cycling network</label>
+      <div id="status" role="status">Loading map data…</div>
+    </aside>
+    <div id="map" aria-label="Map of Toronto green spaces and cycling routes"></div>
+  </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script>
+    const map = L.map('map').setView([43.6532, -79.3832], 12);
+    const cartoKey = '__CARTO_KEY__';
+    L.tileLayer(`https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(cartoKey)}`, {
+      maxZoom: 20,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+    }).addTo(map);
+    const greens = L.geoJSON(null, { style: { color: '#178451', weight: 1, fillColor: '#37b978', fillOpacity: .38 },
+      onEachFeature: (f, layer) => layer.bindPopup(`<div class="popup-title">${escapeHtml(f.properties.area_name || 'Green space')}</div><div>${escapeHtml(f.properties.area_class || '')}</div>`)
+    }).addTo(map);
+    const cycling = L.geoJSON(null, { style: { color: '#e87435', weight: 3, opacity: .85 },
+      onEachFeature: (f, layer) => layer.bindPopup(`<div class="popup-title">${escapeHtml(f.properties.street_name || 'Cycling route')}</div><div>${escapeHtml(f.properties.cnpclass || f.properties.infra_loworder || '')}</div>`)
+    }).addTo(map);
+    const status = document.getElementById('status');
+    let timer;
+    function escapeHtml(value) { return String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    async function loadLayers() {
+      if (location.protocol === 'file:') {
+        status.textContent = 'Open this demo from the API at http://127.0.0.1:8000/demo. Direct file access cannot load map data.';
+        return;
+      }
+      const b = map.getBounds();
+      const params = new URLSearchParams({ min_lon: b.getWest(), min_lat: b.getSouth(), max_lon: b.getEast(), max_lat: b.getNorth() });
+      status.textContent = 'Loading visible map area…';
+      try {
+        const [g, c] = await Promise.all([
+          fetch(`/green-spaces?${params}`).then(check), fetch(`/cycling-network?${params}`).then(check)
+        ]);
+        greens.clearLayers().addData(g); cycling.clearLayers().addData(c);
+        greens.setStyle({ fillOpacity: .38 }); cycling.setStyle({ opacity: .85 });
+        if (!document.getElementById('greens-toggle').checked) greens.setStyle({ fillOpacity: 0, opacity: 0 });
+        if (!document.getElementById('cycling-toggle').checked) cycling.setStyle({ opacity: 0 });
+        status.textContent = `${g.count ?? g.features.length} green spaces · ${c.count ?? c.features.length} cycling segments`;
+      } catch (error) { status.textContent = `Could not load data: ${error.message}`; }
+    }
+    async function check(response) { if (!response.ok) throw new Error(`API returned ${response.status}`); return response.json(); }
+    map.on('moveend', () => { clearTimeout(timer); timer = setTimeout(loadLayers, 180); });
+    document.getElementById('greens-toggle').addEventListener('change', e => e.target.checked ? greens.setStyle({ fillOpacity: .38, opacity: 1 }) : greens.setStyle({ fillOpacity: 0, opacity: 0 }));
+    document.getElementById('cycling-toggle').addEventListener('change', e => cycling.setStyle({ opacity: e.target.checked ? .85 : 0 }));
+    loadLayers();
+  </script>
+</body>
+</html>
