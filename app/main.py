@@ -28,7 +28,7 @@ engine = create_engine(
 )
 
 app = FastAPI(
-    title="GeoQuery API",
+    title="TOQuery API",
     description="A geospatial API for Toronto data.",
     version="0.1.0",
 )
