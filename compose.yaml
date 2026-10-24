@@ -18,6 +18,18 @@ services:
       timeout: 5s
       retries: 5
 
+  data-loader:
+    build: .
+    container_name: geoquery-data-loader
+    command: ["python", "scripts/load_all_data.py"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://geoquery:${DB_PASSWORD}@db:5432/geoquery
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+
   api:
     build: .
     container_name: geoquery-api
@@ -28,8 +40,8 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
-      db:
-        condition: service_healthy
+      data-loader:
+        condition: service_completed_successfully
 
 volumes:
   postgres_data:

@@ -1,6 +1,6 @@
 # TOQuery API
 
-A FastAPI service for querying Toronto green spaces and cycling network data by geographic bounding box. The database uses PostgreSQL with PostGIS.
+A FastAPI service for querying Toronto geospatial data. The database uses PostgreSQL with PostGIS.
 
 ## Requirements
 
@@ -37,7 +37,13 @@ The repository includes a Dockerfile for the API and a Compose configuration for
 
 Compose keeps database files in the `postgres_data` volume between stops. To remove the database and all its stored data as well, run `docker compose down -v`.
 
-The included `sql/init.sql` enables the PostGIS extension on a fresh database. It does not import the green space or cycling data, so load the required `green_spaces` and `cycling_network` tables before expecting those endpoints to return features.
+The included `sql/init.sql` enables the PostGIS extension on a fresh database. On `docker compose up --build`, the `data-loader` service cleans the GeoJSON files in `data/raw`, imports green spaces, the cycling network, and red light cameras into PostGIS, then lets the API start. Keep the three source files in `data/raw`; the loader replaces each corresponding database table when it runs.
+
+To run the same full load manually against a database configured by `DATABASE_URL`, use:
+
+```powershell
+python scripts/load_all_data.py
+```
 
 ## Run the API without Docker
 
@@ -75,7 +81,7 @@ The API is available at `http://localhost:8000`. Stop it with `Ctrl+C`.
 
 ## Endpoints
 
-All API routes use HTTP `GET`. The two data endpoints take a bounding box in longitude/latitude coordinates (EPSG:4326), with the minimum values southwest of the maximum values northeast.
+All API routes use HTTP `GET`. The data endpoints take a bounding box in longitude/latitude coordinates (EPSG:4326), with the minimum values southwest of the maximum values northeast.
 
 ### `GET /health`
 
@@ -95,12 +101,12 @@ Returns green spaces intersecting the requested bounding box as a GeoJSON `Featu
 
 Required query parameters:
 
-| Parameter | Meaning | Valid range |
-| --- | --- | --- |
+| Parameter | Meaning           | Valid range |
+| --------- | ----------------- | ----------- |
 | `min_lon` | Western longitude | -180 to 180 |
-| `min_lat` | Southern latitude | -90 to 90 |
+| `min_lat` | Southern latitude | -90 to 90   |
 | `max_lon` | Eastern longitude | -180 to 180 |
-| `max_lat` | Northern latitude | -90 to 90 |
+| `max_lat` | Northern latitude | -90 to 90   |
 
 Example (central Toronto area):
 
@@ -124,6 +130,20 @@ http://localhost:8000/cycling-network?min_lon=-79.42&min_lat=43.63&max_lon=-79.3
 
 The response includes `type`, `features`, and `count`. Invalid coordinate bounds return `422`; database query failures return `503`.
 
+### `GET /red-light-cameras`
+
+Returns red light camera locations intersecting the requested bounding box as a GeoJSON `FeatureCollection`. Feature properties include the intersection ID, street names, camera and traffic control system IDs, intersection name, district, ward values, and activation date.
+
+It takes the same required `min_lon`, `min_lat`, `max_lon`, and `max_lat` parameters as `/green-spaces`.
+
+Example:
+
+```text
+http://localhost:8000/red-light-cameras?min_lon=-79.42&min_lat=43.63&max_lon=-79.36&max_lat=43.68
+```
+
+The response includes `type`, `features`, and `count`. Invalid coordinate bounds return `422`; database query failures return `503`.
+
 ### `GET /demo`
 
 Serves the Leaflet map demo page. It requires `CARTO_KEY`; without it the endpoint returns `503`. This route is hidden from the generated OpenAPI schema.
@@ -138,4 +158,3 @@ When the server is running, FastAPI provides:
 
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
-

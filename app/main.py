@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 from fastapi.responses import HTMLResponse
 
-import geopandas  # Not needed by the endpoint; remove if unused elsewhere.
 from dotenv import dotenv_values, load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from sqlalchemy import create_engine, text
@@ -253,6 +252,109 @@ def get_cycling_network(
         "installed",
         "upgraded",
         "converted",
+    )
+    features = [
+        {
+            "type": "Feature",
+            "geometry": row["geometry"],
+            "properties": {key: row[key] for key in properties},
+        }
+        for row in rows
+    ]
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "count": len(features),
+    }
+
+
+@app.get("/red-light-cameras")
+def get_red_light_cameras(
+    min_lon: float = Query(ge=-180, le=180),
+    min_lat: float = Query(ge=-90, le=90),
+    max_lon: float = Query(ge=-180, le=180),
+    max_lat: float = Query(ge=-90, le=90),
+):
+    """Return red light camera locations intersecting a geographic bounding box."""
+
+    if min_lon >= max_lon:
+        raise HTTPException(
+            status_code=422,
+            detail="min_lon must be less than max_lon",
+        )
+
+    if min_lat >= max_lat:
+        raise HTTPException(
+            status_code=422,
+            detail="min_lat must be less than max_lat",
+        )
+
+    query = text(
+        """
+        WITH bounds AS (
+            SELECT ST_MakeEnvelope(
+                :min_lon,
+                :min_lat,
+                :max_lon,
+                :max_lat,
+                4326
+            ) AS geom
+        )
+        SELECT
+            rlc.intersection_id,
+            rlc.linear_name_full_1,
+            rlc.linear_name_full_2,
+            rlc.rlc,
+            rlc.tcs,
+            rlc.name,
+            rlc.district,
+            rlc.ward_1,
+            rlc.ward_2,
+            rlc.ward_3,
+            rlc.ward_4,
+            rlc.activation_date,
+            ST_AsGeoJSON(rlc.geometry)::json AS geometry
+        FROM red_light_cameras AS rlc
+        CROSS JOIN bounds
+        WHERE rlc.geometry && bounds.geom
+          AND ST_Intersects(rlc.geometry, bounds.geom)
+        ORDER BY rlc.name, rlc.intersection_id
+        """
+    )
+
+    try:
+        with engine.connect() as connection:
+            rows = connection.execute(
+                query,
+                {
+                    "min_lon": min_lon,
+                    "min_lat": min_lat,
+                    "max_lon": max_lon,
+                    "max_lat": max_lat,
+                },
+            ).mappings().all()
+
+    except SQLAlchemyError:
+        logger.exception("Red light camera query failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to query red light cameras",
+        )
+
+    properties = (
+        "intersection_id",
+        "linear_name_full_1",
+        "linear_name_full_2",
+        "rlc",
+        "tcs",
+        "name",
+        "district",
+        "ward_1",
+        "ward_2",
+        "ward_3",
+        "ward_4",
+        "activation_date",
     )
     features = [
         {
